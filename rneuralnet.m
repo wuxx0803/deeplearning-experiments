@@ -13,7 +13,8 @@ properties(SetAccess=private)
   n_input = [];
   n_dynamic = [];
   n_output = [];
-
+  n_nbh = [];
+  
   p = [];
 
   W = [];
@@ -38,6 +39,7 @@ properties(SetAccess=private)
   
   dE_dw = [];
   dE_du = [];
+  dE_dv = [];
   dE_db = [];
 end
 
@@ -48,21 +50,16 @@ methods
   o.n_output  = n_output;
   o.p = p;
   
-  %rand('seed', 3895719837);
   k = 10;
   o.W = k * (-1 + 2*rand(o.n_dynamic, o.n_dynamic));
-  %o.W = o.W - diag(diag(o.W)); % Be sure that the agent does not
+  %o.W = o.W - diag(diag(o.W)); % Be sure that the neuron does not
                                % project onto itself since this can
                                % change the characteristic time of
                                % the neuron
+
   o.U = k * (-1 + 2*rand(o.n_dynamic, o.n_input  ));
   o.V = k * (-1 + 2*rand(o.n_output,  o.n_dynamic));
   o.b = k * (-1 + 2*rand(o.n_dynamic, 1));
-  
-  o.U = zeros(size(o.U));
-  o.U(1,1) = 1;
-  o.V = zeros(size(o.V));
-  o.V(1,end) = 1;
   
   o.sigma  = @(x)(-1+2*rneuralnet.logistic(x));
   o.isigma = @(z)(2*rneuralnet.inv_logistic(.5*(1+z)));
@@ -98,13 +95,11 @@ methods
       o.dx_dw(k,k,:,cnt) = o.dx_dw(k,k,:,cnt) + permute(o.p*o.iS(k,cnt-1)*o.x(:,cnt-1),[2,3,1]);
     end
 
-    % o.dx_du(:,:,:,cnt) = (1-o.p)*o.dx_du(:,:,:,cnt-1);
-    % for k = 1:o.n_dynamic
-    %   for l = 1:o.n_output
-    %     o.dx_du(:,k,l,cnt) = o.dx_du(:,k,l,cnt) + o.p*o.iS(:,cnt-1).*(o.W*o.dx_du(:,k,l,cnt-1));
-    %   end
-    %   o.dx_du(k,k,:,cnt) = o.dx_du(k,k,:,cnt) + permute(o.p*o.iS(k,cnt-1)*o.y(:,cnt-1),[2,3,1]);
-    % end
+    o.dx_du(:,:,:,cnt) = (1-o.p)*o.dx_du(:,:,:,cnt-1);
+    for k = 1:o.n_dynamic
+      o.dx_du(:,k,:,cnt) = o.dx_du(:,k,:,cnt) + permute(bsxfun(@times,o.W*permute(o.dx_du(:,k,:,cnt-1),[1,3,2,4]),o.p*o.iS(:,cnt-1)),[1,3,2,4]);
+      o.dx_du(k,k,:,cnt) = o.dx_du(k,k,:,cnt) + permute(o.p*o.iS(k,cnt-1)*o.y(:,cnt-1),[2,3,1]);
+    end
     
     o.dx_db(:,:,cnt) = (1-o.p)*o.dx_db(:,:,cnt-1);
     o.dx_db(:,:,cnt) = o.dx_db(:,:,cnt) + bsxfun(@times, o.W*o.dx_db(:,:,cnt-1), o.p*o.iS(:,cnt-1));
@@ -119,24 +114,30 @@ methods
   function back_prop(o)
   
   o.dE_dw = zeros(o.n_dynamic, o.n_dynamic, size(o.y,2));
-  o.dE_du = zeros(o.n_dynamic, o.n_output, size(o.y,2));
+  o.dE_du = zeros(o.n_dynamic, o.n_input, size(o.y,2));
+  o.dE_dv = zeros(o.n_output, o.n_dynamic, size(o.y,2));
   o.dE_db = zeros(o.n_dynamic, size(o.y,2));
+
+  dz = o.z-o.z0;
   for i = 1:o.n_dynamic
     for j = 1:o.n_dynamic
-      o.dE_dw(i,j,:) = sum((o.z-o.z0) .* (o.V * squeeze(o.dx_dw(:,i,j,:))),1);
+      o.dE_dw(i,j,:) = sum(dz .* (o.V * squeeze(o.dx_dw(:,i,j,:))),1);
     end
   end
-  % for i = 1:o.n_dynamic
-  %   for j = 1:o.n_output
-  %     o.dE_du(i,j,:) = sum((o.z-o.z0) .* (o.V * squeeze(o.dx_du(:,i,j,:))),1);
-  %   end
-  % end
   for i = 1:o.n_dynamic
-    o.dE_db(i,:) = sum((o.z-o.z0) .* (o.V * squeeze(o.dx_db(:,i,:))),1);
+    for j = 1:o.n_input
+      o.dE_du(i,j,:) = sum(dz .* (o.V * squeeze(o.dx_du(:,i,j,:))),1);
+    end
   end
+  for i = 1:o.n_dynamic
+    o.dE_db(i,:) = sum(dz .* (o.V * squeeze(o.dx_db(:,i,:))),1);
+  end
+
+  o.dE_dv = bsxfun(@times, permute(o.x,[3,1,2]), permute(dz,[1,3,2]));
   % For debugging!!!
   % d = 1e-6;
   % E0 = o.forward_prop(); W = o.W; dE_dw = []; for i = 1:o.n_dynamic; for j = 1:o.n_dynamic; o.W = W; o.W(i,j) = W(i,j) + d; E1 = o.forward_prop(); dE_dw(i,j,:) = (E1-E0)/d; end; end; o.W = W; o.forward_prop();
+  % E0 = o.forward_prop(); U = o.U; dE_du = []; for i = 1:o.n_dynamic; for j = 1:o.n_input; o.U = U; o.U(i,j) = U(i,j) + d; E1 = o.forward_prop(); dE_du(i,j,:) = (E1-E0)/d; end; end; o.U = U; o.forward_prop();
   % E0 = o.forward_prop(); b = o.b; dE_db = []; for i = 1:o.n_dynamic; o.b = b; o.b(i) = b(i) + d; E1 = o.forward_prop(); dE_db(i,:) = (E1-E0)/d; end; o.b = b; o.forward_prop();
   % x0 = o.x; W = o.W; dx_dw = []; for i = 1:o.n_dynamic; for j = 1:o.n_dynamic; o.W = W; o.W(i,j) = o.W(i,j) + d; o.forward_prop(); x1 = o.x; dx_dw(:,i,j,:) = permute((x1-x0)/d,[1,3,4,2]); end; end; o.W = W;o.forward_prop();
   % keyboard;
@@ -153,14 +154,9 @@ methods
     o.back_prop();
     ids = 1:size(o.y,2);
     o.W = o.W - eta*mean(o.dE_dw(:,:,ids),3);
+    o.U = o.U - eta*mean(o.dE_du(:,:,ids),3);
+    o.V = o.V - eta*mean(o.dE_dv(:,:,ids),3);
     o.b = o.b - eta*mean(o.dE_db(:,ids),2);
-    if length(E) >= 10
-      if max(abs(diff(E(end-9:end)))) < 1e-5
-        o.W = o.W + 10*(-1+2*rand(size(o.W)));
-        o.b = o.b + 10*(-1+2*rand(size(o.b)));
-        disp('Randomize!');
-      end
-    end
   end
   z = o.z;
   disp(mean(err));
