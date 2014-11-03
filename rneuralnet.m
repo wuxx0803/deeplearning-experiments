@@ -84,26 +84,35 @@ methods
   o.S  = zeros(size(o.x));
   o.iS = zeros(size(o.S));
   for cnt = 2:size(o.x,2)
-    o.S(:,cnt-1)  = o.sigma(o.W*o.x(:,cnt-1) + o.U*o.y(:,cnt-1) + o.b);
+    %o.S(:,cnt-1)  = o.sigma(o.W*o.x(:,cnt-1) + o.U*o.y(:,cnt-1) + o.b);
+    o.S(:,cnt-1)  = o.sigma(o.x(:,cnt-1));
     o.iS(:,cnt-1) = o.isigma(o.S(:,cnt-1));
-    o.x(:,cnt) = (1-o.p)*o.x(:,cnt-1) + o.p*o.S(:,cnt-1); % <-- forward prop
+    %o.x(:,cnt) = (1-o.p)*o.x(:,cnt-1) + o.p*o.S(:,cnt-1); % <-- forward prop
+    o.x(:,cnt) = (1-o.p)*o.x(:,cnt-1) + o.p*(o.W*o.S(:,cnt-1) + o.U*o.y(:,cnt-1) + o.b);
     o.z(:,cnt) = o.V * o.x(:,cnt);
     % for backprop
     o.dx_dw(:,:,:,cnt) = (1-o.p)*o.dx_dw(:,:,:,cnt-1);
     for k = 1:o.n_dynamic
-      o.dx_dw(:,k,:,cnt) = o.dx_dw(:,k,:,cnt) + permute(bsxfun(@times,o.W*permute(o.dx_dw(:,k,:,cnt-1),[1,3,2,4]),o.p*o.iS(:,cnt-1)),[1,3,2,4]);
-      o.dx_dw(k,k,:,cnt) = o.dx_dw(k,k,:,cnt) + permute(o.p*o.iS(k,cnt-1)*o.x(:,cnt-1),[2,3,1]);
+      o.dx_dw(:,k,:,cnt) = o.dx_dw(:,k,:,cnt) + permute(o.p*bsxfun(@times,o.W,o.iS(:,cnt-1)')*permute(o.dx_dw(:,k,:,cnt-1),[1,3,2,4]),[1,3,2,4]);
+      o.dx_dw(k,k,:,cnt) = o.dx_dw(k,k,:,cnt) + permute(o.p*o.S(:,cnt-1),[2,3,1]);
+
+      %o.dx_dw(:,k,:,cnt) = o.dx_dw(:,k,:,cnt) + permute(bsxfun(@times,o.W*permute(o.dx_dw(:,k,:,cnt-1),[1,3,2,4]),o.p*o.iS(:,cnt-1)),[1,3,2,4]);
+      %o.dx_dw(k,k,:,cnt) = o.dx_dw(k,k,:,cnt) + permute(o.p*o.iS(k,cnt-1)*o.x(:,cnt-1),[2,3,1]);
     end
 
     o.dx_du(:,:,:,cnt) = (1-o.p)*o.dx_du(:,:,:,cnt-1);
     for k = 1:o.n_dynamic
-      o.dx_du(:,k,:,cnt) = o.dx_du(:,k,:,cnt) + permute(bsxfun(@times,o.W*permute(o.dx_du(:,k,:,cnt-1),[1,3,2,4]),o.p*o.iS(:,cnt-1)),[1,3,2,4]);
-      o.dx_du(k,k,:,cnt) = o.dx_du(k,k,:,cnt) + permute(o.p*o.iS(k,cnt-1)*o.y(:,cnt-1),[2,3,1]);
+      o.dx_du(:,k,:,cnt) = o.dx_du(:,k,:,cnt) + permute(o.p*bsxfun(@times,o.W,o.iS(:,cnt-1)')*permute(o.dx_du(:,k,:,cnt-1),[1,3,2,4]),[1,3,2,4]);
+      o.dx_du(k,k,:,cnt) = o.dx_du(k,k,:,cnt) + permute(o.p*o.y(:,cnt-1),[2,3,1]);
+      %o.dx_du(:,k,:,cnt) = o.dx_du(:,k,:,cnt) + permute(bsxfun(@times,o.W*permute(o.dx_du(:,k,:,cnt-1),[1,3,2,4]),o.p*o.iS(:,cnt-1)),[1,3,2,4]);
+      %o.dx_du(k,k,:,cnt) = o.dx_du(k,k,:,cnt) + permute(o.p*o.iS(k,cnt-1)*o.y(:,cnt-1),[2,3,1]);
     end
     
     o.dx_db(:,:,cnt) = (1-o.p)*o.dx_db(:,:,cnt-1);
-    o.dx_db(:,:,cnt) = o.dx_db(:,:,cnt) + bsxfun(@times, o.W*o.dx_db(:,:,cnt-1), o.p*o.iS(:,cnt-1));
-    o.dx_db(:,:,cnt) = o.dx_db(:,:,cnt) + diag(o.p*o.iS(:,cnt-1));
+    o.dx_db(:,:,cnt) = o.dx_db(:,:,cnt) + o.p*bsxfun(@times,o.W,o.iS(:,cnt-1)')*o.dx_db(:,:,cnt-1);
+    o.dx_db(:,:,cnt) = o.dx_db(:,:,cnt) + o.p*eye(o.n_dynamic);
+    %o.dx_db(:,:,cnt) = o.dx_db(:,:,cnt) + bsxfun(@times, o.W*o.dx_db(:,:,cnt-1), o.p*o.iS(:,cnt-1));
+    %o.dx_db(:,:,cnt) = o.dx_db(:,:,cnt) + diag(o.p*o.iS(:,cnt-1));
   end
   E = .5*sum( (o.z-o.z0).^2, 1 );
   end
@@ -144,16 +153,21 @@ methods
   
   end
 
-  function [z, E] = learn(o, y, z, N, eta)
+  function [z, E] = learn(o, y, z, N, eta, idmin)
   
+  if nargin < 6
+    idmin = size(y,2);
+  end
   E = [];
   o.set_learing_data(y,z);
+  o.W = o.W - diag(diag(o.W));
   for cnt = 1:N
     err = o.forward_prop();
     E = [E; mean(err)];
     o.back_prop();
-    ids = 1:size(o.y,2);
+    ids = 1:idmin;
     o.W = o.W - eta*mean(o.dE_dw(:,:,ids),3);
+    o.W = o.W - diag(diag(o.W));
     o.U = o.U - eta*mean(o.dE_du(:,:,ids),3);
     o.V = o.V - eta*mean(o.dE_dv(:,:,ids),3);
     o.b = o.b - eta*mean(o.dE_db(:,ids),2);
